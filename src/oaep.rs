@@ -151,7 +151,7 @@ where
         rng: Option<&mut Rng>,
         priv_key: &RsaPrivateKey,
         ciphertext: &[u8],
-    ) -> Result<Vec<u8>> {
+    ) -> Result<(Vec<u8>, usize)> {
         decrypt(
             rng,
             priv_key,
@@ -264,7 +264,7 @@ fn decrypt<R, D, MGD>(
     digest: &mut D,
     mgf_digest: &mut MGD,
     label: Option<Box<[u8]>>,
-) -> Result<Vec<u8>>
+) -> Result<(Vec<u8>, usize)>
 where
     R: TryCryptoRng + ?Sized,
     D: Digest + FixedOutputReset,
@@ -440,7 +440,7 @@ mod tests {
                 Oaep::<D>::new()
             };
 
-            let plaintext = if blind {
+            let (plaintext, _) = if blind {
                 prk.decrypt(padding, &ciphertext).unwrap()
             } else {
                 prk.decrypt_blinded(&mut rng, padding, &ciphertext).unwrap()
@@ -488,7 +488,7 @@ mod tests {
                 Oaep::<D, U>::new_with_mgf_hash()
             };
 
-            let plaintext = if blind {
+            let (plaintext, _) = if blind {
                 prk.decrypt(padding, &ciphertext).unwrap()
             } else {
                 prk.decrypt_blinded(&mut rng, padding, &ciphertext).unwrap()
@@ -580,7 +580,7 @@ mod tests {
                 DecryptingKey::<D, MGD>::new(prk.clone())
             };
 
-            let plaintext = if blind {
+            let (plaintext, _) = if blind {
                 decrypting_key.decrypt(&ciphertext).unwrap()
             } else {
                 decrypting_key

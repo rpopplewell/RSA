@@ -628,7 +628,11 @@ impl RsaPrivateKey {
     }
 
     /// Decrypt the given message.
-    pub fn decrypt<P: PaddingScheme>(&self, padding: P, ciphertext: &[u8]) -> Result<Vec<u8>> {
+    pub fn decrypt<P: PaddingScheme>(
+        &self,
+        padding: P,
+        ciphertext: &[u8],
+    ) -> Result<(Vec<u8>, usize)> {
         padding.decrypt(Option::<&mut DummyRng>::None, self, ciphertext)
     }
 
@@ -640,7 +644,7 @@ impl RsaPrivateKey {
         rng: &mut R,
         padding: P,
         ciphertext: &[u8],
-    ) -> Result<Vec<u8>> {
+    ) -> Result<(Vec<u8>, usize)> {
         padding.decrypt(Some(rng), self, ciphertext)
     }
 

@@ -27,7 +27,7 @@ impl DecryptingKey {
 }
 
 impl Decryptor for DecryptingKey {
-    fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
+    fn decrypt(&self, ciphertext: &[u8]) -> Result<(Vec<u8>, usize)> {
         decrypt::<DummyRng>(None, &self.inner, ciphertext)
     }
 }
@@ -37,7 +37,7 @@ impl RandomizedDecryptor for DecryptingKey {
         &self,
         rng: &mut R,
         ciphertext: &[u8],
-    ) -> Result<Vec<u8>> {
+    ) -> Result<(Vec<u8>, usize)> {
         decrypt(Some(rng), &self.inner, ciphertext)
     }
 }

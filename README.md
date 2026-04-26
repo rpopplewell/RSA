@@ -26,8 +26,8 @@ let enc_data = pub_key.encrypt(&mut rng, Pkcs1v15Encrypt, &data[..]).expect("fai
 assert_ne!(&data[..], &enc_data[..]);
 
 // Decrypt
-let dec_data = priv_key.decrypt(Pkcs1v15Encrypt, &enc_data).expect("failed to decrypt");
-assert_eq!(&data[..], &dec_data[..]);
+let (buf, len) = priv_key.decrypt(Pkcs1v15Encrypt, &enc_data).expect("failed to decrypt");
+assert_eq!(&data[..], &buf[buf.len() - len..]);
 ```
 
 > **Note:** If you encounter unusually slow key generation time while using `RsaPrivateKey::new` you can try to compile in release mode or add the following to your `Cargo.toml`. Key generation is much faster when building with higher optimization levels, but this will increase the compile time a bit.

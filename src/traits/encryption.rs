@@ -14,7 +14,7 @@ pub trait RandomizedEncryptor {
 /// Decrypt the given message
 pub trait Decryptor {
     /// Decrypt the given message.
-    fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>>;
+    fn decrypt(&self, ciphertext: &[u8]) -> Result<(Vec<u8>, usize)>;
 }
 
 /// Decrypt the given message using provided random source
@@ -24,7 +24,7 @@ pub trait RandomizedDecryptor {
         &self,
         rng: &mut R,
         ciphertext: &[u8],
-    ) -> Result<Vec<u8>>;
+    ) -> Result<(Vec<u8>, usize)>;
 }
 
 /// Encryption keypair with an associated encryption key.

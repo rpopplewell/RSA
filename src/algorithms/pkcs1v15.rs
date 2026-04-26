@@ -8,12 +8,112 @@
 
 use alloc::vec::Vec;
 use const_oid::AssociatedOid;
-use crypto_bigint::{Choice, CtAssign, CtEq, CtSelect};
-use digest::Digest;
+use crypto_bigint::{BoxedUint, Choice, CtAssign, CtEq, CtLt, CtSelect};
+use digest::{Digest, KeyInit};
+use hmac::{Hmac, Mac};
 use rand_core::TryCryptoRng;
+use sha2::Sha256;
 use zeroize::Zeroizing;
 
+use crate::algorithms::pad::uint_to_zeroizing_be_pad;
 use crate::errors::{Error, Result};
+use crate::traits::keys::PrivateKeyParts;
+
+/// Implicit Rejection Pseudo-Random Function (IRPRF)
+///
+/// Fills `out` using HMAC-SHA256
+///
+/// Only returns an error if the `kdk` is not 32 bytes (SHA256 doesn't return a 32-byte hash)
+/// or the output length is larger than 8192 bytes (k > 65536 bits, since the largest `out` is
+/// the keysize). This check and the resulting error is required by the specification.
+///
+/// See https://www.ietf.org/archive/id/draft-irtf-cfrg-rsa-guidance-08.html#name-implicit-rejection-pseudo-r
+///
+fn irprf(kdk: &[u8], label: &[u8], out: &mut [u8]) -> Result<()> {
+    if kdk.len() != 32 || out.len() > 8192 {
+        return Err(Error::Decryption);
+    }
+
+    let bit_length = ((out.len() * 8) as u16).to_be_bytes();
+    let mac_init = Hmac::<Sha256>::new_from_slice(kdk).unwrap();
+
+    for (i, chunk) in out.chunks_mut(32).enumerate() {
+        let block = mac_init
+            .clone()
+            .chain_update((i as u16).to_be_bytes())
+            .chain_update(label)
+            .chain_update(bit_length)
+            .finalize()
+            .into_bytes();
+        chunk.copy_from_slice(&block[..chunk.len()]);
+    }
+
+    Ok(())
+}
+
+/// Derives the alternative message and length for PKCS#1 v1.5 implicit rejection.
+///
+/// Fills `am` with the k-byte alternative message and returns the alternative length AL.
+/// `am[k - AL..]` is the fallback plaintext when padding is invalid.
+///
+/// Only returns an error if the keysize k > 65536 bits, via derive_alternative_message
+///
+/// See https://www.ietf.org/archive/id/draft-irtf-cfrg-rsa-guidance-08.html#section-7.2-3.3.1
+///
+fn derive_am(
+    am: &mut [u8],
+    priv_key: &impl PrivateKeyParts,
+    ciphertext: &BoxedUint,
+) -> Result<usize> {
+    const LENGTH_LABEL: &[u8] = b"length";
+    const MESSAGE_LABEL: &[u8] = b"message";
+    let k: usize = priv_key.size();
+
+    // Step 1a: D = I2OSP(d, k)
+    let d = Zeroizing::new(uint_to_zeroizing_be_pad(priv_key.d().clone(), k)?);
+
+    // Step 1b: DH = SHA256(D)
+    let dh = Zeroizing::new(<[u8; 32]>::from(Sha256::digest(&d)));
+
+    // Step 1c: KDK = HMAC(DH, C, SHA256)
+    let c_bytes = ciphertext.to_be_bytes();
+    let kdk = Zeroizing::new(<[u8; 32]>::from(
+        Hmac::<Sha256>::new_from_slice(dh.as_ref())
+            .unwrap()
+            .chain_update(&c_bytes[c_bytes.len() - k..])
+            .finalize()
+            .into_bytes(),
+    ));
+
+    // Step 2a: CL = IRPRF(KDK, "length", 256)
+    let mut cl = Zeroizing::new([0u8; 256]);
+    irprf(kdk.as_ref(), LENGTH_LABEL, cl.as_mut())?;
+
+    // Step 2b: AM = IRPRF(KDK, "message", k)
+    irprf(kdk.as_ref(), MESSAGE_LABEL, am)?;
+
+    // Step 3a & 3b: select the last candidate length <= (k - 11)
+    // Subtract 11 to account for the minimum padding length in PKCS#1 v1.5
+    // We represent the AM candidate lengths as u16s and use a mask to truncate
+    // any bits that would make a candidate larger than k - 11.
+    //
+    // Iterate through all candidates and select the last one that is valid
+    // i.e. candidate <= max_len = (k - 11) with constant time operations.
+    //
+    // Returns 0 if all of the candidates are invalid.
+    let mut al = 0u16;
+    let max_len = (k - 11) as u16;
+    let mask = u16::MAX >> max_len.leading_zeros();
+
+    for chunk in cl.chunks_exact(2) {
+        let candidate = u16::from_be_bytes([chunk[0], chunk[1]]) & mask;
+        let is_valid = !u16::ct_lt(&max_len, &candidate);
+
+        al = u16::ct_select(&al, &candidate, is_valid);
+    }
+
+    Ok(al as usize)
+}
 
 /// Fills the provided slice with random values, which are guaranteed
 /// to not be zero.
@@ -59,7 +159,12 @@ where
     Ok(em)
 }
 
-/// Removes the encryption padding scheme from PKCS#1 v1.5.
+/// Removes the encryption padding scheme from PKCS#1 v1.5
+///
+/// Returns the plaintext if the padding is valid, and an alternative plaintext
+/// if the padding is invalid.
+///
+/// See https://www.ietf.org/archive/id/draft-irtf-cfrg-rsa-guidance-08.html#section-7.2-3.4.1
 ///
 /// Note that whether this function returns an error or not discloses secret
 /// information. If an attacker can cause this function to run repeatedly and
@@ -67,13 +172,24 @@ where
 /// forge signatures as if they had the private key. See
 /// `decrypt_session_key` for a way of solving this problem.
 #[inline]
-pub(crate) fn pkcs1v15_encrypt_unpad(em: Vec<u8>, k: usize) -> Result<Vec<u8>> {
-    let (valid, out, index) = decrypt_inner(em, k)?;
-    if valid == 0 {
-        return Err(Error::Decryption);
-    }
+pub(crate) fn pkcs1v15_implicit_rejection(
+    em: &[u8],
+    priv_key: &impl PrivateKeyParts,
+    ciphertext: &BoxedUint,
+) -> Result<(Vec<u8>, usize)> {
+    let k = priv_key.size();
 
-    Ok(out[index as usize..].to_vec())
+    let mut am = vec![0u8; k];
+    let al = derive_am(&mut am, priv_key, ciphertext)?;
+
+    let (valid, l) = decrypt_inner(em, k)?;
+    let msg_len = usize::from(u16::ct_select(&(al as u16), &(l as u16), valid));
+
+    let buf: Vec<u8> = (0..k)
+        .map(|i| u8::ct_select(&am[i], &em[i], valid))
+        .collect();
+
+    Ok((buf, msg_len))
 }
 
 /// Removes the PKCS1v15 padding It returns one or zero in valid that indicates whether the
@@ -81,8 +197,11 @@ pub(crate) fn pkcs1v15_encrypt_unpad(em: Vec<u8>, k: usize) -> Result<Vec<u8>> {
 /// returned in em so that it may be read independently of whether it was valid
 /// in order to maintain constant memory access patterns. If the plaintext was
 /// valid then index contains the index of the original message in em.
+///
+/// See https://www.ietf.org/archive/id/draft-irtf-cfrg-rsa-guidance-08.html#section-7.2-3.4.1
+///
 #[inline]
-fn decrypt_inner(em: Vec<u8>, k: usize) -> Result<(u8, Vec<u8>, u32)> {
+fn decrypt_inner(em: &[u8], k: usize) -> Result<(Choice, usize)> {
     if k < 11 {
         return Err(Error::Decryption);
     }
@@ -103,17 +222,17 @@ fn decrypt_inner(em: Vec<u8>, k: usize) -> Result<(u8, Vec<u8>, u32)> {
         looking_for_index &= !equals0;
     }
 
-    // The PS padding must be at least 8 bytes long, and it starts two
-    // bytes into em.
-    // TODO: WARNING: THIS MUST BE CONSTANT TIME CHECK:
-    // Ref: https://github.com/dalek-cryptography/subtle/issues/20
-    // This is currently copy & paste from the constant time impl in
-    // go, but very likely not sufficient.
-    let valid_ps = Choice::from_u8_lsb((((2i32 + 8i32 - index as i32 - 1i32) >> 31) & 1) as u8);
+    // EM = 0x00 || 0x02 || PS (>=8 non-zero bytes) || 0x00 || M
+    // PS must be at least 8 bytes; it starts at byte 2, so the separator must be at index >= 10.
+    let valid_ps = !u32::ct_lt(&index, &10);
     let valid = first_byte_is_zero & second_byte_is_two & !looking_for_index & valid_ps;
     index = u32::ct_select(&0, &(index + 1), valid);
+    // Per the spec, if the zero byte separator was not found, set the length to zero by setting index to k.
+    index = u32::ct_select(&index, &(k as u32), looking_for_index);
 
-    Ok((valid.to_u8(), em, index))
+    let l = k - index as usize;
+
+    Ok((valid, l))
 }
 
 #[inline]
@@ -187,6 +306,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::PublicKeyParts;
+    use crate::RsaPrivateKey;
+    use crabgrind::memcheck::MemState;
     use rand::rngs::ChaCha8Rng;
     use rand_core::SeedableRng;
 
@@ -209,5 +331,59 @@ mod tests {
         let message = vec![1u8; 4];
         let res = pkcs1v15_encrypt_pad(&mut rng, &message, k);
         assert_eq!(res, Err(Error::MessageTooLong));
+    }
+
+    // Marks a slice as Valgrind-undefined. Any conditional branch that depends on
+    // these bytes will be flagged as a CT violation when run under Valgrind memcheck.
+    // This is a no-op when not running under Valgrind.
+    fn ct_poison(data: &[u8]) {
+        let _ = crabgrind::memcheck::mark_mem(
+            data.as_ptr() as *mut core::ffi::c_void,
+            data.len(),
+            MemState::Undefined,
+        );
+    }
+
+    // valgrind --tool=memcheck --error-exitcode=1 target/debug/deps/<binary> ct_implicit_rejection_valid --ignored
+    #[test]
+    #[ignore = "run under Valgrind"]
+    fn ct_implicit_rejection_valid() {
+        let mut rng = ChaCha8Rng::from_seed([42; 32]);
+        let key = RsaPrivateKey::new(&mut rng, 1024).unwrap();
+        let k = key.size();
+        let ciphertext = BoxedUint::from_be_slice(&vec![1u8; k], key.n_bits_precision()).unwrap();
+
+        // EM = 0x00 || 0x02 || PS (>=8 non-zero bytes) || 0x00 || M
+        let mut em = vec![0u8; k];
+        em[0] = 0x00;
+        em[1] = 0x02;
+        em[2..10].fill(0x42);
+        em[10] = 0x00;
+        em[11..].fill(0x55);
+
+        ct_poison(&em);
+
+        let _ = pkcs1v15_implicit_rejection(&em, &key, &ciphertext);
+    }
+
+    // valgrind --tool=memcheck --error-exitcode=1 target/debug/deps/<binary> ct_implicit_rejection_invalid --ignored
+    #[test]
+    #[ignore = "run under Valgrind"]
+    fn ct_implicit_rejection_invalid() {
+        let mut rng = ChaCha8Rng::from_seed([42; 32]);
+        let key = RsaPrivateKey::new(&mut rng, 1024).unwrap();
+        let k = key.size();
+        let ciphertext = BoxedUint::from_be_slice(&vec![1u8; k], key.n_bits_precision()).unwrap();
+
+        let mut em = vec![0u8; k];
+        em[0] = 0xFF; // invalid
+        em[1] = 0x02;
+        em[2..10].fill(0x42);
+        em[10] = 0x00;
+        em[11..].fill(0x55);
+
+        ct_poison(&em);
+
+        let _ = pkcs1v15_implicit_rejection(&em, &key, &ciphertext);
     }
 }

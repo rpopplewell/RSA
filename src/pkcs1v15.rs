@@ -61,7 +61,7 @@ impl PaddingScheme for Pkcs1v15Encrypt {
         rng: Option<&mut Rng>,
         priv_key: &RsaPrivateKey,
         ciphertext: &[u8],
-    ) -> Result<Vec<u8>> {
+    ) -> Result<(Vec<u8>, usize)> {
         decrypt(rng, priv_key, ciphertext)
     }
 
@@ -163,6 +163,11 @@ fn encrypt<R: TryCryptoRng + ?Sized>(
 ///
 /// If an `rng` is passed, it uses RSA blinding to avoid timing side-channel attacks.
 ///
+/// Returns the plaintext if the padding is valid, and an alternative plaintext
+/// if the padding is invalid.
+///
+/// See https://www.ietf.org/archive/id/draft-irtf-cfrg-rsa-guidance-08.html
+///
 /// Note that whether this function returns an error or not discloses secret
 /// information. If an attacker can cause this function to run repeatedly and
 /// learn whether each instance returned an error then they can decrypt and
@@ -173,14 +178,14 @@ fn decrypt<R: TryCryptoRng + ?Sized>(
     rng: Option<&mut R>,
     priv_key: &RsaPrivateKey,
     ciphertext: &[u8],
-) -> Result<Vec<u8>> {
+) -> Result<(Vec<u8>, usize)> {
     key::check_public(priv_key)?;
 
     let ciphertext = BoxedUint::from_be_slice(ciphertext, priv_key.n_bits_precision())?;
     let em = rsa_decrypt_and_check(priv_key, rng, &ciphertext)?;
     let em = uint_to_zeroizing_be_pad(em, priv_key.size())?;
 
-    pkcs1v15_encrypt_unpad(em, priv_key.size())
+    pkcs1v15_implicit_rejection(&em, priv_key, &ciphertext)
 }
 
 /// Calculates the signature of hashed using
@@ -329,10 +334,10 @@ mod tests {
     fn test_decrypt_pkcs1v15(#[case] ciphertext: &str, #[case] plaintext: &str) {
         let priv_key = get_private_key();
 
-        let out = priv_key
+        let (buf, len) = priv_key
             .decrypt(Pkcs1v15Encrypt, &Base64::decode_vec(ciphertext).unwrap())
             .unwrap();
-        assert_eq!(out, plaintext.as_bytes());
+        assert_eq!(&buf[buf.len() - len..], plaintext.as_bytes());
     }
 
     #[test]
@@ -354,8 +359,8 @@ mod tests {
 
             let blind: bool = rng.next_u32() < (1u32 << 31);
             let blinder = if blind { Some(&mut rng) } else { None };
-            let plaintext = decrypt(blinder, &priv_key, &ciphertext).unwrap();
-            assert_eq!(input, plaintext);
+            let (buf, len) = decrypt(blinder, &priv_key, &ciphertext).unwrap();
+            assert_eq!(input, &buf[buf.len() - len..]);
         }
     }
 
@@ -380,10 +385,10 @@ mod tests {
         let priv_key = get_private_key();
         let decrypting_key = DecryptingKey::new(priv_key);
 
-        let out = decrypting_key
+        let (buf, len) = decrypting_key
             .decrypt(&Base64::decode_vec(ciphertext).unwrap())
             .unwrap();
-        assert_eq!(out, plaintext.as_bytes());
+        assert_eq!(&buf[buf.len() - len..], plaintext.as_bytes());
     }
 
     #[test]
@@ -405,14 +410,14 @@ mod tests {
             assert_ne!(input, ciphertext);
 
             let blind: bool = rng.next_u32() < (1u32 << 31);
-            let plaintext = if blind {
+            let (buf, len) = if blind {
                 decrypting_key
                     .decrypt_with_rng(&mut rng, &ciphertext)
                     .unwrap()
             } else {
                 decrypting_key.decrypt(&ciphertext).unwrap()
             };
-            assert_eq!(input, plaintext);
+            assert_eq!(input, &buf[buf.len() - len..]);
         }
     }
 

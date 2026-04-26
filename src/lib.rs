@@ -20,10 +20,8 @@
 //!
 //! ## OAEP encryption
 //!
-//! Note: requires `sha2` feature of `rsa` crate is enabled.
 //!
-#![cfg_attr(feature = "sha2", doc = "```")]
-#![cfg_attr(not(feature = "sha2"), doc = "```ignore")]
+//! ```
 //! use rsa::{RsaPrivateKey, RsaPublicKey, Oaep, sha2::Sha256};
 //!
 //! let mut rng = rand::rng();
@@ -40,7 +38,7 @@
 //!
 //! // Decrypt
 //! let padding = Oaep::<Sha256>::new();
-//! let dec_data = private_key.decrypt(padding, &enc_data).expect("failed to decrypt");
+//! let (dec_data, _) = private_key.decrypt(padding, &enc_data).expect("failed to decrypt");
 //! assert_eq!(&data[..], &dec_data[..]);
 //! ```
 //!
@@ -66,8 +64,8 @@
 //! assert_ne!(&data[..], &enc_data[..]);
 //!
 //! // Decrypt
-//! let dec_data = private_key.decrypt(Pkcs1v15Encrypt, &enc_data).expect("failed to decrypt");
-//! assert_eq!(&data[..], &dec_data[..]);
+//! let (buf, len) = private_key.decrypt(Pkcs1v15Encrypt, &enc_data).expect("failed to decrypt");
+//! assert_eq!(&data[..], &buf[buf.len() - len..]);
 //! ```
 //!
 //! ## PKCS#1 v1.5 signatures
@@ -77,10 +75,8 @@
 //! See security notes in the <code><a href="./pkcs1v15/index.html">pkcs1v15</a></code> module.
 //! </div>
 //!
-//! Note: requires `sha2` feature of `rsa` crate is enabled.
 //!
-#![cfg_attr(feature = "sha2", doc = "```")]
-#![cfg_attr(not(feature = "sha2"), doc = "```ignore")]
+//! ```
 //! use rsa::RsaPrivateKey;
 //! use rsa::pkcs1v15::{SigningKey, VerifyingKey};
 //! use rsa::signature::{Keypair, RandomizedSigner, SignatureEncoding, Verifier};
@@ -104,10 +100,8 @@
 //!
 //! ## PSS signatures
 //!
-//! Note: requires `sha2` feature of `rsa` crate is enabled.
 //!
-#![cfg_attr(feature = "sha2", doc = "```")]
-#![cfg_attr(not(feature = "sha2"), doc = "```ignore")]
+//! ```
 //! use rsa::RsaPrivateKey;
 //! use rsa::pss::{BlindedSigningKey, VerifyingKey};
 //! use rsa::signature::{Keypair,RandomizedSigner, SignatureEncoding, Verifier};
@@ -253,7 +247,6 @@ mod key;
 pub use pkcs1;
 #[cfg(feature = "encoding")]
 pub use pkcs8;
-#[cfg(feature = "sha2")]
 pub use sha2;
 
 pub use crate::{

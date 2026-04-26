@@ -18,7 +18,7 @@ pub trait PaddingScheme {
         rng: Option<&mut Rng>,
         priv_key: &RsaPrivateKey,
         ciphertext: &[u8],
-    ) -> Result<Vec<u8>>;
+    ) -> Result<(Vec<u8>, usize)>;
 
     /// Encrypt the given message using the given public key.
     fn encrypt<Rng: TryCryptoRng + ?Sized>(

@@ -138,7 +138,7 @@ pub(crate) fn oaep_decrypt<D, MGD>(
     mgf_digest: &mut MGD,
     label: Option<Box<[u8]>>,
     k: usize,
-) -> Result<Vec<u8>>
+) -> Result<(Vec<u8>, usize)>
 where
     D: Digest + FixedOutputReset,
     MGD: Digest + FixedOutputReset,
@@ -163,8 +163,10 @@ where
     }
 
     let index = res.unwrap();
+    let em = em[index as usize..].to_vec();
+    let len = em.len();
 
-    Ok(em[index as usize..].to_vec())
+    Ok((em, len))
 }
 
 ///Decrypts OAEP padding.

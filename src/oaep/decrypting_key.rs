@@ -59,8 +59,11 @@ where
     D: Digest,
     MGD: Digest + FixedOutputReset,
 {
-    fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
-        decrypt_digest::<DummyRng, D, MGD>(None, &self.inner, ciphertext, self.label.clone())
+    fn decrypt(&self, ciphertext: &[u8]) -> Result<(Vec<u8>, usize)> {
+        let data =
+            decrypt_digest::<DummyRng, D, MGD>(None, &self.inner, ciphertext, self.label.clone())?;
+        let len = data.len();
+        Ok((data, len))
     }
 }
 
@@ -73,8 +76,11 @@ where
         &self,
         rng: &mut R,
         ciphertext: &[u8],
-    ) -> Result<Vec<u8>> {
-        decrypt_digest::<_, D, MGD>(Some(rng), &self.inner, ciphertext, self.label.clone())
+    ) -> Result<(Vec<u8>, usize)> {
+        let data =
+            decrypt_digest::<_, D, MGD>(Some(rng), &self.inner, ciphertext, self.label.clone())?;
+        let len = data.len();
+        Ok((data, len))
     }
 }
 
