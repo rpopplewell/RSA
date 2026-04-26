@@ -163,6 +163,11 @@ fn encrypt<R: TryCryptoRng + ?Sized>(
 ///
 /// If an `rng` is passed, it uses RSA blinding to avoid timing side-channel attacks.
 ///
+/// Returns the plaintext if the padding is valid, and an alternative plaintext
+/// if the padding is invalid.
+///
+/// See https://www.ietf.org/archive/id/draft-irtf-cfrg-rsa-guidance-08.html
+///
 /// Note that whether this function returns an error or not discloses secret
 /// information. If an attacker can cause this function to run repeatedly and
 /// learn whether each instance returned an error then they can decrypt and
@@ -180,7 +185,7 @@ fn decrypt<R: TryCryptoRng + ?Sized>(
     let em = rsa_decrypt_and_check(priv_key, rng, &ciphertext)?;
     let em = uint_to_zeroizing_be_pad(em, priv_key.size())?;
 
-    pkcs1v15_encrypt_unpad(em, priv_key.size())
+    pkcs1v15_implicit_rejection(&em, priv_key, &ciphertext)
 }
 
 /// Calculates the signature of hashed using
