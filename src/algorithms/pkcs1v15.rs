@@ -188,6 +188,7 @@ pub(crate) fn pkcs1v15_implicit_rejection(
     // Two-level ct_select: first pick between am/em (valid/invalid path), then between 
     // 0 and that byte (in-message vs out-of-message). The clamped src index when j >= msg_len is
     // discarded by ct_select, and .min() compiles to a cmov.
+    // We iterate over the entire max_len to pass class 5 probes of the marvin-toolkit, which uses msg_len = 0. 
     let max_len = k - 11;
     let mut result = vec![0u8; max_len];
     for j in 0..max_len {
