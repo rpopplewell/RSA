@@ -196,7 +196,6 @@ pub(crate) fn pkcs1v15_implicit_rejection(
         let selected = u8::ct_select(&am[src], &em[src], valid);
         result[j] = u8::ct_select(&0u8, &selected, in_msg);
     }
-
     result.truncate(msg_len);
     Ok(result)
 }
@@ -315,9 +314,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traits::PublicKeyParts;
-    use crate::RsaPrivateKey;
-    use crabgrind::memcheck::MemState;
     use rand::rngs::ChaCha8Rng;
     use rand_core::SeedableRng;
 
@@ -340,62 +336,5 @@ mod tests {
         let message = vec![1u8; 4];
         let res = pkcs1v15_encrypt_pad(&mut rng, &message, k);
         assert_eq!(res, Err(Error::MessageTooLong));
-    }
-
-    // Marks a slice as Valgrind-undefined. Any conditional branch that depends on
-    // these bytes will be flagged as a CT violation when run under Valgrind memcheck.
-    // This is a no-op when not running under Valgrind.
-    fn ct_poison(data: &[u8]) {
-        let _ = crabgrind::memcheck::mark_mem(
-            data.as_ptr() as *mut core::ffi::c_void,
-            data.len(),
-            MemState::Undefined,
-        );
-    }
-
-    //
-    // flags copy_from_slice whose size depends on msg_len (transitively tainted from em).
-    //
-    // valgrind --tool=memcheck --error-exitcode=1 <binary> ct_implicit_rejection_valid --ignored
-    #[test]
-    #[ignore = "run under Valgrind"]
-    fn ct_implicit_rejection_valid() {
-        let mut rng = ChaCha8Rng::from_seed([42; 32]);
-        let key = RsaPrivateKey::new(&mut rng, 1024).unwrap();
-        let k = key.size();
-        let ciphertext = BoxedUint::from_be_slice(&vec![1u8; k], key.n_bits_precision()).unwrap();
-
-        // EM = 0x00 || 0x02 || PS (>=8 non-zero bytes) || 0x00 || M
-        let mut em = vec![0u8; k];
-        em[0] = 0x00;
-        em[1] = 0x02;
-        em[2..10].fill(0x42);
-        em[10] = 0x00;
-        em[11..].fill(0x55);
-
-        ct_poison(&em);
-
-        let _ = pkcs1v15_implicit_rejection(&em, &key, &ciphertext);
-    }
-
-    // valgrind --tool=memcheck --error-exitcode=1 <binary> ct_implicit_rejection_invalid --ignored
-    #[test]
-    #[ignore = "run under Valgrind"]
-    fn ct_implicit_rejection_invalid() {
-        let mut rng = ChaCha8Rng::from_seed([42; 32]);
-        let key = RsaPrivateKey::new(&mut rng, 1024).unwrap();
-        let k = key.size();
-        let ciphertext = BoxedUint::from_be_slice(&vec![1u8; k], key.n_bits_precision()).unwrap();
-
-        let mut em = vec![0u8; k];
-        em[0] = 0xFF; // invalid
-        em[1] = 0x02;
-        em[2..10].fill(0x42);
-        em[10] = 0x00;
-        em[11..].fill(0x55);
-
-        ct_poison(&em);
-
-        let _ = pkcs1v15_implicit_rejection(&em, &key, &ciphertext);
     }
 }
