@@ -8,6 +8,8 @@
 
 use alloc::vec::Vec;
 use const_oid::AssociatedOid;
+use core::sync::atomic::compiler_fence;
+use core::sync::atomic::Ordering::SeqCst;
 use crypto_bigint::{BoxedUint, Choice, CtAssign, CtEq, CtLt, CtSelect};
 use digest::{Digest, KeyInit};
 use hmac::{Hmac, Mac};
@@ -185,10 +187,20 @@ pub(crate) fn pkcs1v15_implicit_rejection(
     let (valid, l) = decrypt_inner(em, k)?;
     let msg_len = usize::from(u16::ct_select(&(al as u16), &(l as u16), valid));
 
-    // Two-level ct_select: first pick between am/em (valid/invalid path), then between 
-    // 0 and that byte (in-message vs out-of-message). The clamped src index when j >= msg_len is
-    // discarded by ct_select, and .min() compiles to a cmov.
-    // We iterate over the entire max_len to pass class 5 probes of the marvin-toolkit, which uses msg_len = 0. 
+    // Try reading every byte of am and em to warm the cache independent of msg_len.
+    let mut _sink = 0u8;
+    for i in 0..k {
+        unsafe {
+            _sink ^= core::ptr::read_volatile(&am[i]) ^ core::ptr::read_volatile(&em[i]);
+        }
+    }
+
+    compiler_fence(SeqCst);
+
+    // First pick between em/am (valid/invalid path), then between that byte and 0 (in-message vs out-of-message).
+    // The clamped src index when j >= msg_len is discarded by ct_select, and .min() compiles to a cmov.
+    //
+    // We iterate over the entire max_len to pass class 5 probes of the marvin-toolkit, which uses msg_len = 0.
     let max_len = k - 11;
     let mut result = vec![0u8; max_len];
     for j in 0..max_len {
@@ -236,8 +248,6 @@ fn decrypt_inner(em: &[u8], k: usize) -> Result<(Choice, usize)> {
     let valid_ps = !u32::ct_lt(&index, &10);
     let valid = first_byte_is_zero & second_byte_is_two & !looking_for_index & valid_ps;
     index = u32::ct_select(&0, &(index + 1), valid);
-    // Per the spec, if the zero byte separator was not found, set the length to zero by setting index to k.
-    index = u32::ct_select(&index, &(k as u32), looking_for_index);
 
     let l = k - index as usize;
 
