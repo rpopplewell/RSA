@@ -187,9 +187,9 @@ pub(crate) fn pkcs1v15_implicit_rejection(
     let (valid, l) = decrypt_inner(em, k)?;
     let msg_len = usize::from(u16::ct_select(&(al as u16), &(l as u16), valid));
 
-    // Try reading every byte of am and em to warm the cache independent of msg_len.
+    // Touch one byte per cache line (conservatively 32 bytes) in am and em to warm the cache independent of msg_len.
     let mut _sink = 0u8;
-    for i in 0..k {
+    for i in (0..k).step_by(32) {
         unsafe {
             _sink ^= core::ptr::read_volatile(&am[i]) ^ core::ptr::read_volatile(&em[i]);
         }
@@ -205,7 +205,7 @@ pub(crate) fn pkcs1v15_implicit_rejection(
     let mut result = vec![0u8; max_len];
     for j in 0..max_len {
         let in_msg = u16::ct_lt(&(j as u16), &(msg_len as u16));
-        let src = (k - msg_len + j).min(k - 1);
+        let src = k.wrapping_sub(msg_len).wrapping_add(j) % k;
         let selected = u8::ct_select(&am[src], &em[src], valid);
         result[j] = u8::ct_select(&0u8, &selected, in_msg);
     }
