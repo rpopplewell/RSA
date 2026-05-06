@@ -25,9 +25,8 @@ use crate::traits::keys::PrivateKeyParts;
 ///
 /// Fills `out` using HMAC-SHA256
 ///
-/// Only returns an error if the `kdk` is not 32 bytes (SHA256 doesn't return a 32-byte hash)
-/// or the output length is larger than 8192 bytes (k > 65536 bits, since the largest `out` is
-/// the keysize). This check and the resulting error is required by the specification.
+/// Returns an error if `kdk` is not 32 bytes or `out` exceeds 8192 bytes (k > 65536 bits);
+/// both checks are required by the specification.
 ///
 /// See https://www.ietf.org/archive/id/draft-irtf-cfrg-rsa-guidance-08.html#name-implicit-rejection-pseudo-r
 ///
@@ -58,7 +57,7 @@ fn irprf(kdk: &[u8], label: &[u8], out: &mut [u8]) -> Result<()> {
 /// Fills `am` with the k-byte alternative message and returns the alternative length AL.
 /// `am[k - AL..]` is the fallback plaintext when padding is invalid.
 ///
-/// Only returns an error if the keysize k > 65536 bits, via derive_alternative_message
+/// Returns an error if the keysize k > 65536 bits.
 ///
 /// See https://www.ietf.org/archive/id/draft-irtf-cfrg-rsa-guidance-08.html#section-7.2-3.3.1
 ///
@@ -94,15 +93,9 @@ fn derive_am(
     // Step 2b: AM = IRPRF(KDK, "message", k)
     irprf(kdk.as_ref(), MESSAGE_LABEL, am)?;
 
-    // Step 3a & 3b: select the last candidate length <= (k - 11)
-    // Subtract 11 to account for the minimum padding length in PKCS#1 v1.5
-    // We represent the AM candidate lengths as u16s and use a mask to truncate
-    // any bits that would make a candidate larger than k - 11.
-    //
-    // Iterate through all candidates and select the last one that is valid
-    // i.e. candidate <= max_len = (k - 11) with constant time operations.
-    //
-    // Returns 0 if all of the candidates are invalid.
+    // Step 3: select the last candidate <= max_len.
+    // The mask pre-screens candidates by zeroing bits above max_len's highest set bit,
+    // avoiding an obvious-overflow branch before the ct_lt comparison.
     let mut al = 0u16;
     let max_len = (k - 11) as u16;
     let mask = u16::MAX >> max_len.leading_zeros();
@@ -205,7 +198,7 @@ pub(crate) fn pkcs1v15_implicit_rejection(
     let mut result = vec![0u8; max_len];
     for j in 0..max_len {
         let in_msg = u16::ct_lt(&(j as u16), &(msg_len as u16));
-        let src = k.wrapping_sub(msg_len).wrapping_add(j) % k;
+        let src = (k - msg_len + j).min(k - 1);
         let selected = u8::ct_select(&am[src], &em[src], valid);
         result[j] = u8::ct_select(&0u8, &selected, in_msg);
     }

@@ -242,25 +242,21 @@ mod oid {
             const_oid::ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.5");
     }
 
-    #[cfg(feature = "sha2")]
     impl RsaSignatureAssociatedOid for sha2::Sha224 {
         const OID: ObjectIdentifier =
             const_oid::ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.14");
     }
 
-    #[cfg(feature = "sha2")]
     impl RsaSignatureAssociatedOid for sha2::Sha256 {
         const OID: ObjectIdentifier =
             const_oid::ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.11");
     }
 
-    #[cfg(feature = "sha2")]
     impl RsaSignatureAssociatedOid for sha2::Sha384 {
         const OID: ObjectIdentifier =
             const_oid::ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.12");
     }
 
-    #[cfg(feature = "sha2")]
     impl RsaSignatureAssociatedOid for sha2::Sha512 {
         const OID: ObjectIdentifier =
             const_oid::ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.13");
